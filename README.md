@@ -1,4 +1,4 @@
-## Useful Resources
+## References
 - [Official Document: Kubernetes Filter](https://docs.fluentbit.io/manual/pipeline/filters/kubernetes)
 - [fluent/fluent-bit-kubernetes-logging](https://github.com/fluent/fluent-bit-kubernetes-logging)
 - [microsoft/fluentbit-containerd-cri-o-json-log](https://github.com/microsoft/fluentbit-containerd-cri-o-json-log/blob/main/config.yaml)
