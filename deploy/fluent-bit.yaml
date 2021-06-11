@@ -1,0 +1,152 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: fluent-bit
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: fluent-bit-read
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - namespaces
+  - pods
+  verbs:
+  - get
+  - list
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: fluent-bit-read
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: fluent-bit-read
+subjects:
+- kind: ServiceAccount
+  name: fluent-bit
+  namespace: kube-system
+---
+apiVersion: v1
+data:
+  container-log.conf: |
+    [INPUT]
+      Name              tail
+      Tag               kube.*
+      Path              /var/log/containers/*.log
+      Parser            cri
+      DB                /var/fluent-bit/state/flb_container.db
+      Mem_Buf_Limit     5MB
+      Skip_Long_Lines   Off
+      storage.type      filesystem
+      Refresh_Interval  10
+      Read_from_Head    true
+
+    [FILTER]
+      Name                kubernetes
+      Match               kube.*
+      Kube_URL            https://kubernetes.default.svc:443
+      Kube_Tag_Prefix     kube.var.log.containers.
+      Merge_Log           On
+      Merge_Log_Key       log_processed
+      K8S-Logging.Parser  Off
+      K8S-Logging.Exclude On
+      Kube_CA_File        /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+      Kube_Token_File     /var/run/secrets/kubernetes.io/serviceaccount/token
+      Labels              On
+      Annotations         Off
+  fluent-bit.conf: |-
+    [SERVICE]
+      Flush                     1
+      Log_Level                 info
+      Daemon                    off
+      Parsers_File              parsers.conf
+      HTTP_Server               On
+      HTTP_Listen               0.0.0.0
+      HTTP_Port                 2020
+      storage.path              /var/fluent-bit/state/flb-storage/
+      storage.sync              normal
+      storage.checksum          off
+      storage.backlog.mem_limit 5M
+
+    @INCLUDE container-log.conf
+    @INCLUDE output-stdout.conf
+  output-stdout.conf: |
+    [OUTPUT]
+      Name stdout
+      Match kube.var.log.containers.*
+  parsers.conf: |-
+    [PARSER]
+      Name        cri
+      Format      regex
+      Regex       ^(?<time>[^ ]+) (?<stream>stdout|stderr) (?<logtag>[^ ]*) (?<log>.*)$
+      Time_Key    time
+      Time_Format %Y-%m-%dT%H:%M:%S.%L%z
+kind: ConfigMap
+metadata:
+  name: fluent-bit-config
+  namespace: kube-system
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: fluent-bit
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      k8s-app: fluent-bit
+  template:
+    metadata:
+      annotations:
+        fluentbit.io/exclude: "true"
+        prometheus.io/path: /api/v1/metrics/prometheus
+        prometheus.io/port: "2020"
+        prometheus.io/scrape: "true"
+      labels:
+        k8s-app: fluent-bit
+    spec:
+      containers:
+      - command:
+        - /fluent-bit/bin/fluent-bit
+        - -c
+        - /fluent-bit/etc/fluent-bit.conf
+        image: fluent/fluent-bit:1.7.8-debug
+        name: fluent-bit
+        resources:
+          limits:
+            memory: 200Mi
+          requests:
+            cpu: 500m
+            memory: 100Mi
+        volumeMounts:
+        - mountPath: /fluent-bit/etc
+          name: config
+        - mountPath: /var/log/containers
+          name: varlogcontainers
+          readOnly: true
+        - mountPath: /var/log/pods
+          name: varlogpods
+          readOnly: true
+        - mountPath: /var/fluent-bit/state
+          name: fluent-bit-state
+      serviceAccountName: fluent-bit
+      terminationGracePeriodSeconds: 10
+      volumes:
+      - configMap:
+          name: fluent-bit-config
+        name: config
+      - hostPath:
+          path: /var/fluent-bit/state
+        name: fluent-bit-state
+      - hostPath:
+          path: /var/log/containers
+        name: varlogcontainers
+      - hostPath:
+          path: /var/log/pods
+        name: varlogpods
